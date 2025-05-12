@@ -1,61 +1,67 @@
-import streamlit as st
+from flask import Flask, request, render_template_string
 from yt_dlp import YoutubeDL
 import os
 
-# Set download folder
-DOWNLOAD_FOLDER = "downloads"
+app = Flask(__name__)
+
+# Create download directory
+DOWNLOAD_FOLDER = os.path.join(os.getcwd(), 'downloads')
 os.makedirs(DOWNLOAD_FOLDER, exist_ok=True)
 
-st.set_page_config(page_title="YouTube Downloader", page_icon="🎬", layout="centered")
-
-st.markdown("""
+# HTML template
+HTML_TEMPLATE = '''
+<!doctype html>
+<html>
+<head>
+    <title>Video Downloader</title>
     <style>
-    .main {
-        background-color: #f5f5f5;
-    }
-    .stButton>button {
-        background-color: #ff4b4b;
-        color: white;
-        font-size: 16px;
-        border-radius: 10px;
-        padding: 10px 20px;
-    }
-    .stTextInput>div>div>input {
-        font-size: 16px;
-        padding: 10px;
-    }
+        body { font-family: Arial, sans-serif; margin: 40px; background-color: #f4f4f4; color: #333; }
+        .container { background-color: white; padding: 20px; border-radius: 10px; width: 500px; margin: auto; box-shadow: 0 0 10px rgba(0,0,0,0.1); }
+        input[type="text"] { width: 100%; padding: 10px; font-size: 16px; margin-bottom: 10px; }
+        button { padding: 10px 20px; font-size: 16px; background-color: #4CAF50; color: white; border: none; cursor: pointer; }
+        a { color: #4CAF50; font-weight: bold; }
     </style>
-""", unsafe_allow_html=True)
+</head>
+<body>
+    <div class="container">
+        <h2>🎬 YouTube & TikTok Video Downloader</h2>
+        <form method="POST">
+            <input type="text" name="url" placeholder="Paste YouTube or TikTok link here..." required>
+            <button type="submit">Download</button>
+        </form>
+        {% if message %}<p>{{ message }}</p>{% endif %}
+        {% if file_path %}
+            <p>✅ File ready: <a href="{{ file_path }}" target="_blank">{{ file_path }}</a></p>
+        {% endif %}
+    </div>
+</body>
+</html>
+'''
 
-st.title("🎬 YouTube Video Downloader")
-st.write("Paste your YouTube video link below to download.")
+@app.route('/', methods=['GET', 'POST'])
+def home():
+    message = ''
+    file_path = ''
+    if request.method == 'POST':
+        video_url = request.form['url']
 
-video_url = st.text_input("YouTube Video URL", placeholder="https://www.youtube.com/watch?v=...")
+        ydl_opts = {
+            'outtmpl': os.path.join(DOWNLOAD_FOLDER, '%(title)s.%(ext)s'),
+            'format': 'bestvideo+bestaudio/best',
+            'noplaylist': True,
+            'quiet': True,
+        }
 
-if st.button("Download Video"):
-    if video_url.strip() == "":
-        st.warning("Please enter a valid YouTube video URL.")
-    else:
-        with st.spinner("Downloading... Please wait..."):
-            try:
-                ydl_opts = {
-                    'outtmpl': os.path.join(DOWNLOAD_FOLDER, '%(title)s.%(ext)s'),
-                    'format': 'best[ext=mp4]/bestvideo[ext=mp4]+bestaudio[ext=m4a]/best'
-                }
-                with YoutubeDL(ydl_opts) as ydl:
-                    info = ydl.extract_info(video_url, download=True)
-                    file_name = ydl.prepare_filename(info)
-                st.success("✅ Download completed!")
-                st.write(f"**Video Title:** {info['title']}")
-                st.video(file_name)
+        try:
+            with YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(video_url, download=True)
+                downloaded_file = ydl.prepare_filename(info)
+                file_path = downloaded_file
+                message = '✅ Download completed!'
+        except Exception as e:
+            message = f'❌ Error: {str(e)}'
 
-                # Offer download link
-                with open(file_name, "rb") as file:
-                    btn = st.download_button(
-                        label="Download to your device",
-                        data=file,
-                        file_name=os.path.basename(file_name),
-                        mime="video/mp4"
-                    )
-            except Exception as e:
-                st.error(f"❌ Error downloading video: {e}")
+    return render_template_string(HTML_TEMPLATE, message=message, file_path=file_path)
+
+if __name__ == '__main__':
+    app.run(debug=True)
