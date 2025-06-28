@@ -47,11 +47,11 @@ if st.button("Download Video"):
                 }
                 with YoutubeDL(ydl_opts) as ydl:
                     info = ydl.extract_info(video_url, download=True)
-                    
+
                     if info.get('is_live'):
                         st.warning("⚠️ Live streams are not supported. Please provide a regular video URL.")
-                        return
-                    
+                        st.stop()
+
                     file_name = ydl.prepare_filename(info)
                     if not file_name.endswith(".mp4"):
                         file_name += ".mp4"  # Ensure extension
@@ -61,11 +61,10 @@ if st.button("Download Video"):
 
                 file_size = os.path.getsize(file_name)
                 size_mb = file_size / (1024 * 1024)
-
                 st.write(f"**File size:** {size_mb:.2f} MB")
 
                 if size_mb > 500:
-                    st.info(f"The file is too large for in-browser download button. "
+                    st.info(f"The file is too large for in-browser download. "
                             f"You can find it in the `{DOWNLOAD_FOLDER}` folder on the server.")
                 else:
                     with open(file_name, "rb") as file:
@@ -76,7 +75,6 @@ if st.button("Download Video"):
                             mime="video/mp4"
                         )
 
-                # Display preview if reasonable size
                 if size_mb < 200:
                     st.video(file_name)
                 else:
