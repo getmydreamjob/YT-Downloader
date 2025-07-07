@@ -8,6 +8,15 @@ import traceback
 DOWNLOAD_FOLDER = "downloads"
 os.makedirs(DOWNLOAD_FOLDER, exist_ok=True)
 
+# Optional cookies upload for age-restricted/private videos
+st.sidebar.header("Optional: Cookies")
+cookies_file = st.sidebar.file_uploader("Upload your YouTube cookies.txt", type=["txt"])
+cookie_path = None
+if cookies_file:
+    cookie_path = os.path.join(DOWNLOAD_FOLDER, "cookies.txt")
+    with open(cookie_path, "wb") as f:
+        f.write(cookies_file.getbuffer())
+
 st.set_page_config(
     page_title="YouTube Downloader",
     page_icon="🎬",
@@ -17,9 +26,7 @@ st.set_page_config(
 # Custom CSS
 st.markdown("""
     <style>
-    .main {
-        background-color: #f5f5f5;
-    }
+    .main { background-color: #f5f5f5; }
     .stButton>button {
         background-color: #ff4b4b;
         color: white;
@@ -49,7 +56,6 @@ if st.button("Download Video"):
                     'outtmpl': os.path.join(DOWNLOAD_FOLDER, '%(title)s.%(ext)s'),
                     'format': 'best[ext=mp4]/bestvideo[ext=mp4]+bestaudio[ext=m4a]/best',
                     'merge_output_format': 'mp4',
-                    # Mimic a real browser to avoid 403
                     'http_headers': {
                         'User-Agent': (
                             'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
@@ -57,48 +63,46 @@ if st.button("Download Video"):
                             'Chrome/115.0.0.0 Safari/537.36'
                         ),
                         'Referer': 'https://www.youtube.com',
+                        'Accept-Language': 'en-US,en;q=0.9',
                     },
-                    # If needed for private/age-restricted videos, uncomment and set your cookies file:
-                    # 'cookiefile': '/path/to/cookies.txt',
                     'retries': 3,
                 }
+                # If user uploaded cookies, include them
+                if cookie_path:
+                    ydl_opts['cookiefile'] = cookie_path
 
                 with YoutubeDL(ydl_opts) as ydl:
-                    # 1) Fetch metadata only to reject live streams quickly
+                    # Metadata only, to reject live streams
                     info = ydl.extract_info(video_url, download=False)
                     if info.get('is_live'):
-                        st.warning("⚠️ Live streams are not supported. Please provide a regular video URL.")
+                        st.warning("⚠️ Live streams are not supported.")
                         st.stop()
 
-                    # 2) Perform the actual download
+                    # Actual download
                     info = ydl.extract_info(video_url, download=True)
                     file_name = ydl.prepare_filename(info)
                     if not file_name.endswith(".mp4"):
                         file_name += ".mp4"
 
                 st.success("✅ Download completed!")
-                st.write(f"**Video Title:** {info.get('title', 'Unknown')}")
+                st.write(f"**Title:** {info.get('title', 'Unknown')}")
 
-                file_size = os.path.getsize(file_name)
-                size_mb = file_size / (1024 * 1024)
-                st.write(f"**File size:** {size_mb:.2f} MB")
+                size_mb = os.path.getsize(file_name) / (1024 * 1024)
+                st.write(f"**Size:** {size_mb:.2f} MB")
 
-                # Offer in-browser download if file isn't too large
                 if size_mb <= 500:
                     with open(file_name, "rb") as f:
                         st.download_button(
-                            label="Download to your device",
+                            "Download to your device",
                             data=f,
                             file_name=os.path.basename(file_name),
                             mime="video/mp4"
                         )
                 else:
                     st.info(
-                        f"The file is large ({size_mb:.2f} MB) and cannot be served via the browser download button. "
-                        f"Please retrieve it from the `{DOWNLOAD_FOLDER}` folder on the server."
+                        f"File is large ({size_mb:.2f} MB); retrieve it from `{DOWNLOAD_FOLDER}` on the server."
                     )
 
-                # Preview only small videos
                 if size_mb <= 200:
                     st.video(file_name)
                 else:
@@ -106,7 +110,10 @@ if st.button("Download Video"):
 
             except DownloadError as de:
                 st.error(f"❌ Download failed: {de}")
-                st.info("HTTP 403 usually means access was denied (private/restricted content or regional block).")
+                st.info(
+                    "A 403 may mean the video is private, region-locked, or age-restricted. "
+                    "Try uploading your YouTube cookies.txt above."
+                )
             except Exception as e:
                 st.error(f"❌ Unexpected error: {e}")
                 st.text(traceback.format_exc())
