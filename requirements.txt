@@ -1,4 +1,8 @@
 streamlit
 yt-dlp
-moviepy
-imageio-ffmpeg
+moviepy==1.0.3
+imageio==2.31.5
+imageio-ffmpeg==0.4.7
+numpy==1.26.4
+tqdm==4.66.2
+decorator==5.1.1
