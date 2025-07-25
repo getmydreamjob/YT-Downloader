@@ -3,117 +3,127 @@ from yt_dlp import YoutubeDL
 from yt_dlp.utils import DownloadError
 import subprocess
 import os
+import pickle
 import traceback
+import openai
+from googleapiclient.discovery import build
+from googleapiclient.http import MediaFileUpload
+from google.auth.transport.requests import Request
 
-# Set download folder
+# --- Configuration ---
 DOWNLOAD_FOLDER = "downloads"
 os.makedirs(DOWNLOAD_FOLDER, exist_ok=True)
 
-st.set_page_config(
-    page_title="YouTube Downloader with Mirroring",
-    page_icon="🎬",
-    layout="centered"
-)
+st.set_page_config(page_title="YouTube Auto Mirror Uploader", page_icon="🎬")
+st.title("🎬 YouTube Downloader + Mirror + Auto Upload")
 
-st.sidebar.header("Optional: Cookies")
-cookies_file = st.sidebar.file_uploader("Upload your YouTube cookies.txt", type=["txt"])
-cookie_path = None
-if cookies_file:
-    cookie_path = os.path.join(DOWNLOAD_FOLDER, "cookies.txt")
-    with open(cookie_path, "wb") as f:
-        f.write(cookies_file.getbuffer())
+video_url = st.text_input("Paste a YouTube link:", placeholder="https://www.youtube.com/watch?v=...")
+openai.api_key = st.secrets["OPENAI_API_KEY"]  # Your secret key from .streamlit/secrets.toml
 
-st.title("🎬 YouTube Video Downloader with Mirroring")
-video_url = st.text_input("YouTube URL", placeholder="https://www.youtube.com/watch?v=...")
+# --- Authenticate YouTube ---
+def get_authenticated_service():
+    with open("token.pickle", "rb") as token:
+        creds = pickle.load(token)
+    if creds.expired and creds.refresh_token:
+        creds.refresh(Request())
+    return build("youtube", "v3", credentials=creds)
 
-if st.button("Download Video"):
+# --- AI: Generate Title & Description ---
+def generate_title_description(original_title):
+    prompt = f"""Improve this YouTube title and write a short description.
+
+Title: "{original_title}"
+
+Return both on two separate lines:
+1. New Title
+2. Short engaging description
+"""
+    try:
+        response = openai.ChatCompletion.create(
+            model="gpt-3.5-turbo",  # ✅ Cheapest model
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.7,
+            max_tokens=100,
+        )
+        lines = response.choices[0].message.content.strip().split("\n")
+        title = lines[0].strip()
+        description = lines[1].strip() if len(lines) > 1 else "Auto-uploaded via Streamlit app."
+        return title, description
+    except Exception as e:
+        st.warning(f"AI fallback: {e}")
+        return original_title, "Auto-uploaded via Streamlit app."
+
+# --- Upload to YouTube ---
+def upload_to_youtube(file_path, title, description, privacy="unlisted"):
+    youtube = get_authenticated_service()
+    media = MediaFileUpload(file_path, mimetype="video/*", resumable=True)
+    request = youtube.videos().insert(
+        part="snippet,status",
+        body={
+            "snippet": {
+                "title": title,
+                "description": description,
+                "tags": ["streamlit", "mirrored", "yt-dlp"]
+            },
+            "status": {
+                "privacyStatus": privacy
+            }
+        },
+        media_body=media
+    )
+    response = None
+    while response is None:
+        status, response = request.next_chunk()
+        if status:
+            st.write(f"Upload progress: {int(status.progress() * 100)}%")
+    return response.get("id")
+
+# --- Main Logic ---
+if st.button("Download, Mirror, and Upload"):
     if not video_url.strip():
-        st.warning("Enter a valid YouTube URL.")
+        st.warning("Please enter a valid YouTube link.")
     else:
-        with st.spinner("Downloading..."):
+        with st.spinner("Processing video..."):
             try:
+                # Step 1: Download video
                 ydl_opts = {
                     'outtmpl': os.path.join(DOWNLOAD_FOLDER, '%(title)s.%(ext)s'),
                     'format': 'best[ext=mp4]/bestvideo[ext=mp4]+bestaudio[ext=m4a]/best',
                     'merge_output_format': 'mp4',
-                    'http_headers': {
-                        'User-Agent': (
-                            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
-                            'AppleWebKit/537.36 (KHTML, like Gecko) '
-                            'Chrome/115.0.0.0 Safari/537.36'
-                        ),
-                        'Referer': 'https://www.youtube.com',
-                        'Accept-Language': 'en-US,en;q=0.9',
-                    },
-                    'geo_bypass': True,
-                    'geo_bypass_country': 'US',
                     'retries': 3,
                 }
-                if cookie_path:
-                    ydl_opts['cookiefile'] = cookie_path
 
                 with YoutubeDL(ydl_opts) as ydl:
                     info = ydl.extract_info(video_url, download=False)
-                    if info.get('is_live'):
-                        st.warning("Live streams are not supported.")
+                    if info.get("is_live"):
+                        st.error("Live streams are not supported.")
                         st.stop()
 
                     info = ydl.extract_info(video_url, download=True)
-                    file_name = ydl.prepare_filename(info)
-                    if not file_name.endswith(".mp4"):
-                        file_name += ".mp4"
+                    file_path = ydl.prepare_filename(info)
+                    if not file_path.endswith(".mp4"):
+                        file_path += ".mp4"
 
-                st.success("Download completed!")
-                st.write(f"**Title:** {info.get('title','Unknown')}")
+                # Step 2: Mirror the video
+                mirrored_path = file_path.replace(".mp4", "_mirrored.mp4")
+                subprocess.run([
+                    "ffmpeg", "-y", "-i", file_path,
+                    "-vf", "hflip", "-c:a", "copy", mirrored_path
+                ], check=True)
 
-                size_mb = os.path.getsize(file_name) / (1024 * 1024)
-                st.write(f"**Original File Size:** {size_mb:.1f} MB")
+                # Step 3: Generate AI title/description
+                title, description = generate_title_description(info.get("title", "Untitled"))
 
-                # Original download button
-                with open(file_name, "rb") as f:
-                    st.download_button("Download Original", data=f, file_name=os.path.basename(file_name))
+                # Step 4: Upload mirrored video
+                st.info("Uploading to YouTube...")
+                video_id = upload_to_youtube(mirrored_path, title, description)
 
-                try:
-                    st.video(file_name)
-                except:
-                    st.warning("Preview not available.")
-
-                # -----------------------------
-                # Create mirrored version (ffmpeg)
-                # -----------------------------
-                mirrored_file_name = file_name.replace(".mp4", "_mirrored.mp4")
-
-                if not os.path.exists(mirrored_file_name):
-                    st.info("Creating mirrored version using ffmpeg...")
-                    try:
-                        subprocess.run([
-                            "ffmpeg", "-y",
-                            "-i", file_name,
-                            "-vf", "hflip",
-                            "-c:a", "copy",
-                            mirrored_file_name
-                        ], check=True)
-                        st.success("Mirrored video created successfully!")
-                    except subprocess.CalledProcessError as e:
-                        st.error("Failed to mirror video with ffmpeg.")
-                        st.text(e)
-
-                if os.path.exists(mirrored_file_name):
-                    mirrored_size_mb = os.path.getsize(mirrored_file_name) / (1024 * 1024)
-                    st.write(f"**Mirrored File Size:** {mirrored_size_mb:.1f} MB")
-                    with open(mirrored_file_name, "rb") as f:
-                        st.download_button("Download Mirrored Video", data=f, file_name=os.path.basename(mirrored_file_name))
-                    try:
-                        st.video(mirrored_file_name)
-                    except:
-                        st.warning("Preview not available for mirrored file.")
+                # Done
+                st.success("✅ Uploaded successfully!")
+                st.markdown(f"[▶️ Watch on YouTube](https://youtube.com/watch?v={video_id})")
 
             except DownloadError as de:
-                st.error(f"Download failed: {de}")
-                st.info(
-                    "403 means YouTube blocked access. Ensure your cookies.txt is from a logged-in account "
-                    "and try again, or the video may be private/age-restricted."
-                )
+                st.error(f"Download error: {de}")
             except Exception as e:
                 st.error(f"Unexpected error: {e}")
                 st.text(traceback.format_exc())
