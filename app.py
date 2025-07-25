@@ -5,12 +5,12 @@ import subprocess
 import os
 import pickle
 import traceback
-import openai
+from openai import OpenAI
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
 from google.auth.transport.requests import Request
 
-# --- Configuration ---
+# --- Config ---
 DOWNLOAD_FOLDER = "downloads"
 os.makedirs(DOWNLOAD_FOLDER, exist_ok=True)
 
@@ -18,29 +18,32 @@ st.set_page_config(page_title="YouTube Auto Mirror Uploader", page_icon="🎬")
 st.title("🎬 YouTube Downloader + Mirror + Auto Upload")
 
 video_url = st.text_input("Paste a YouTube link:", placeholder="https://www.youtube.com/watch?v=...")
-openai.api_key = st.secrets["OPENAI_API_KEY"]  # Your secret key from .streamlit/secrets.toml
+client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
 
 # --- Authenticate YouTube ---
 def get_authenticated_service():
+    if not os.path.exists("token.pickle"):
+        st.error("Missing token.pickle. Please upload it in Streamlit Cloud 'Files' tab.")
+        st.stop()
     with open("token.pickle", "rb") as token:
         creds = pickle.load(token)
     if creds.expired and creds.refresh_token:
         creds.refresh(Request())
     return build("youtube", "v3", credentials=creds)
 
-# --- AI: Generate Title & Description ---
+# --- AI: Title + Description ---
 def generate_title_description(original_title):
-    prompt = f"""Improve this YouTube title and write a short description.
+    prompt = f"""Improve this YouTube title and write a short video description.
 
 Title: "{original_title}"
 
 Return both on two separate lines:
 1. New Title
-2. Short engaging description
+2. Description
 """
     try:
-        response = openai.ChatCompletion.create(
-            model="gpt-3.5-turbo",  # ✅ Cheapest model
+        response = client.chat.completions.create(
+            model="gpt-3.5-turbo",
             messages=[{"role": "user", "content": prompt}],
             temperature=0.7,
             max_tokens=100,
@@ -63,7 +66,7 @@ def upload_to_youtube(file_path, title, description, privacy="unlisted"):
             "snippet": {
                 "title": title,
                 "description": description,
-                "tags": ["streamlit", "mirrored", "yt-dlp"]
+                "tags": ["auto-upload", "streamlit", "mirrored"]
             },
             "status": {
                 "privacyStatus": privacy
@@ -85,7 +88,6 @@ if st.button("Download, Mirror, and Upload"):
     else:
         with st.spinner("Processing video..."):
             try:
-                # Step 1: Download video
                 ydl_opts = {
                     'outtmpl': os.path.join(DOWNLOAD_FOLDER, '%(title)s.%(ext)s'),
                     'format': 'best[ext=mp4]/bestvideo[ext=mp4]+bestaudio[ext=m4a]/best',
@@ -98,28 +100,25 @@ if st.button("Download, Mirror, and Upload"):
                     if info.get("is_live"):
                         st.error("Live streams are not supported.")
                         st.stop()
-
                     info = ydl.extract_info(video_url, download=True)
                     file_path = ydl.prepare_filename(info)
                     if not file_path.endswith(".mp4"):
                         file_path += ".mp4"
 
-                # Step 2: Mirror the video
+                # Mirror the video
                 mirrored_path = file_path.replace(".mp4", "_mirrored.mp4")
                 subprocess.run([
                     "ffmpeg", "-y", "-i", file_path,
                     "-vf", "hflip", "-c:a", "copy", mirrored_path
                 ], check=True)
 
-                # Step 3: Generate AI title/description
+                # AI Title + Description
                 title, description = generate_title_description(info.get("title", "Untitled"))
 
-                # Step 4: Upload mirrored video
+                # Upload to YouTube
                 st.info("Uploading to YouTube...")
                 video_id = upload_to_youtube(mirrored_path, title, description)
-
-                # Done
-                st.success("✅ Uploaded successfully!")
+                st.success("✅ Uploaded!")
                 st.markdown(f"[▶️ Watch on YouTube](https://youtube.com/watch?v={video_id})")
 
             except DownloadError as de:
