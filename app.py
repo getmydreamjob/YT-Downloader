@@ -1,3 +1,4 @@
+
 import streamlit as st
 from yt_dlp import YoutubeDL
 from yt_dlp.utils import DownloadError
@@ -33,24 +34,22 @@ if st.button("Download Video"):
         with st.spinner("Downloading..."):
             try:
                 ydl_opts = {
-                    'outtmpl': os.path.join(DOWNLOAD_FOLDER, '%(title).100s.%(ext)s'),
-                    'format': 'bestvideo[ext=mp4][height<=720]+bestaudio[ext=m4a]/best[ext=mp4][height<=720]',
+                    'outtmpl': os.path.join(DOWNLOAD_FOLDER, '%(title)s.%(ext)s'),
+                    'format': 'bestvideo[ext=mp4][protocol^=https]+bestaudio[ext=m4a][protocol^=https]/best[ext=mp4][protocol^=https]',
                     'merge_output_format': 'mp4',
-                    'retries': 5,
-                    'ignoreerrors': True,
-                    'geo_bypass': True,
-                    'nocheckcertificate': True,
                     'http_headers': {
                         'User-Agent': (
                             'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
                             'AppleWebKit/537.36 (KHTML, like Gecko) '
-                            'Chrome/117.0.0.0 Safari/537.36'
+                            'Chrome/115.0.0.0 Safari/537.36'
                         ),
-                        'Referer': 'https://www.youtube.com/',
-                        'Accept-Language': 'en-US,en;q=0.9'
-                    }
+                        'Referer': 'https://www.youtube.com',
+                        'Accept-Language': 'en-US,en;q=0.9',
+                    },
+                    'geo_bypass': True,
+                    'geo_bypass_country': 'US',
+                    'retries': 3,
                 }
-
                 if cookie_path:
                     ydl_opts['cookiefile'] = cookie_path
 
@@ -65,12 +64,11 @@ if st.button("Download Video"):
                     if not file_name.endswith(".mp4"):
                         file_name += ".mp4"
 
-                if not os.path.exists(file_name) or os.path.getsize(file_name) == 0:
+                if not os.path.exists(file_name) or os.path.getsize(file_name) < 1_000:
                     raise Exception("Download completed but file is empty. Possibly blocked or failed silently.")
 
                 st.success("Download completed!")
                 st.write(f"**Title:** {info.get('title','Unknown')}")
-
                 size_mb = os.path.getsize(file_name) / (1024 * 1024)
                 st.write(f"**Original File Size:** {size_mb:.1f} MB")
 
@@ -82,19 +80,22 @@ if st.button("Download Video"):
                 except:
                     st.warning("Preview not available.")
 
-                # Mirroring with ffmpeg
+                # Mirror using ffmpeg
                 mirrored_file_name = file_name.replace(".mp4", "_mirrored.mp4")
                 if not os.path.exists(mirrored_file_name):
                     st.info("Creating mirrored version using ffmpeg...")
                     try:
                         subprocess.run([
-                            "ffmpeg", "-y", "-i", file_name,
-                            "-vf", "hflip", "-c:a", "copy", mirrored_file_name
+                            "ffmpeg", "-y",
+                            "-i", file_name,
+                            "-vf", "hflip",
+                            "-c:a", "copy",
+                            mirrored_file_name
                         ], check=True)
                         st.success("Mirrored video created successfully!")
                     except subprocess.CalledProcessError as e:
                         st.error("Failed to mirror video with ffmpeg.")
-                        st.text(str(e))
+                        st.text(e)
 
                 if os.path.exists(mirrored_file_name):
                     mirrored_size_mb = os.path.getsize(mirrored_file_name) / (1024 * 1024)
@@ -108,10 +109,7 @@ if st.button("Download Video"):
 
             except DownloadError as de:
                 st.error(f"Download failed: {de}")
-                st.info(
-                    "403 means YouTube blocked access. Ensure your cookies.txt is from a logged-in account "
-                    "and try again, or the video may be private/age-restricted."
-                )
+                st.info("403 means YouTube blocked access. Try uploading cookies.txt or confirm the video is public.")
             except Exception as e:
                 st.error(f"Unexpected error: {e}")
                 st.text(traceback.format_exc())
