@@ -1,4 +1,3 @@
-
 import streamlit as st
 from yt_dlp import YoutubeDL
 from yt_dlp.utils import DownloadError
@@ -35,21 +34,20 @@ if st.button("Download Video"):
             try:
                 ydl_opts = {
                     'outtmpl': os.path.join(DOWNLOAD_FOLDER, '%(title)s.%(ext)s'),
-                    'format': 'bestvideo[ext=mp4][protocol^=https]+bestaudio[ext=m4a][protocol^=https]/best[ext=mp4][protocol^=https]',
+                    'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
                     'merge_output_format': 'mp4',
-                    'http_headers': {
-                        'User-Agent': (
-                            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
-                            'AppleWebKit/537.36 (KHTML, like Gecko) '
-                            'Chrome/115.0.0.0 Safari/537.36'
-                        ),
-                        'Referer': 'https://www.youtube.com',
-                        'Accept-Language': 'en-US,en;q=0.9',
-                    },
-                    'geo_bypass': True,
-                    'geo_bypass_country': 'US',
+                    'quiet': True,
+                    'noplaylist': True,
                     'retries': 3,
+                    'concurrent_fragment_downloads': 1,
+                    'geo_bypass': True,
+                    'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
+                    'http_headers': {
+                        'Referer': 'https://www.youtube.com',
+                        'Accept-Language': 'en-US,en;q=0.9'
+                    }
                 }
+
                 if cookie_path:
                     ydl_opts['cookiefile'] = cookie_path
 
@@ -64,14 +62,16 @@ if st.button("Download Video"):
                     if not file_name.endswith(".mp4"):
                         file_name += ".mp4"
 
-                if not os.path.exists(file_name) or os.path.getsize(file_name) < 1_000:
+                if not os.path.exists(file_name) or os.path.getsize(file_name) < 1_000_000:
                     raise Exception("Download completed but file is empty. Possibly blocked or failed silently.")
 
-                st.success("Download completed!")
+                st.success("✅ Download completed!")
                 st.write(f"**Title:** {info.get('title','Unknown')}")
+
                 size_mb = os.path.getsize(file_name) / (1024 * 1024)
                 st.write(f"**Original File Size:** {size_mb:.1f} MB")
 
+                # Download button for original
                 with open(file_name, "rb") as f:
                     st.download_button("Download Original", data=f, file_name=os.path.basename(file_name))
 
@@ -80,8 +80,11 @@ if st.button("Download Video"):
                 except:
                     st.warning("Preview not available.")
 
-                # Mirror using ffmpeg
+                # -----------------------------
+                # Create mirrored version (ffmpeg)
+                # -----------------------------
                 mirrored_file_name = file_name.replace(".mp4", "_mirrored.mp4")
+
                 if not os.path.exists(mirrored_file_name):
                     st.info("Creating mirrored version using ffmpeg...")
                     try:
@@ -109,7 +112,10 @@ if st.button("Download Video"):
 
             except DownloadError as de:
                 st.error(f"Download failed: {de}")
-                st.info("403 means YouTube blocked access. Try uploading cookies.txt or confirm the video is public.")
+                st.info(
+                    "403 means YouTube blocked access. Ensure your cookies.txt is from a logged-in account "
+                    "and try again, or the video may be private/age-restricted."
+                )
             except Exception as e:
                 st.error(f"Unexpected error: {e}")
                 st.text(traceback.format_exc())
