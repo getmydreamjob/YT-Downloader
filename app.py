@@ -5,6 +5,7 @@ import subprocess
 import os
 import traceback
 
+# Set download folder
 DOWNLOAD_FOLDER = "downloads"
 os.makedirs(DOWNLOAD_FOLDER, exist_ok=True)
 
@@ -33,15 +34,12 @@ if st.button("Download Video"):
             try:
                 ydl_opts = {
                     'outtmpl': os.path.join(DOWNLOAD_FOLDER, '%(title).100s.%(ext)s'),
-                    'format': 'bestvideo+bestaudio/best',
+                    'format': 'bestvideo[ext=mp4][height<=720]+bestaudio[ext=m4a]/best[ext=mp4][height<=720]',
                     'merge_output_format': 'mp4',
                     'retries': 5,
-                    'quiet': False,
                     'ignoreerrors': True,
-                    'noplaylist': True,
                     'geo_bypass': True,
                     'nocheckcertificate': True,
-                    'concurrent_fragment_downloads': 1,
                     'http_headers': {
                         'User-Agent': (
                             'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
@@ -52,6 +50,7 @@ if st.button("Download Video"):
                         'Accept-Language': 'en-US,en;q=0.9'
                     }
                 }
+
                 if cookie_path:
                     ydl_opts['cookiefile'] = cookie_path
 
@@ -67,47 +66,52 @@ if st.button("Download Video"):
                         file_name += ".mp4"
 
                 if not os.path.exists(file_name) or os.path.getsize(file_name) == 0:
-                    st.error("Download failed or YouTube blocked the video (0 bytes). Try with cookies.txt.")
-                    st.stop()
+                    raise Exception("Download completed but file is empty. Possibly blocked or failed silently.")
 
-                st.success("✅ Download completed!")
+                st.success("Download completed!")
                 st.write(f"**Title:** {info.get('title','Unknown')}")
-                st.write(f"**Size:** {os.path.getsize(file_name) / (1024 * 1024):.2f} MB")
+
+                size_mb = os.path.getsize(file_name) / (1024 * 1024)
+                st.write(f"**Original File Size:** {size_mb:.1f} MB")
 
                 with open(file_name, "rb") as f:
-                    st.download_button("⬇ Download Original", data=f, file_name=os.path.basename(file_name))
+                    st.download_button("Download Original", data=f, file_name=os.path.basename(file_name))
+
                 try:
                     st.video(file_name)
                 except:
-                    st.warning("Video preview not available.")
+                    st.warning("Preview not available.")
 
-                # Mirroring
-                mirrored_file = file_name.replace(".mp4", "_mirrored.mp4")
-                if not os.path.exists(mirrored_file):
-                    st.info("Mirroring with ffmpeg...")
+                # Mirroring with ffmpeg
+                mirrored_file_name = file_name.replace(".mp4", "_mirrored.mp4")
+                if not os.path.exists(mirrored_file_name):
+                    st.info("Creating mirrored version using ffmpeg...")
                     try:
                         subprocess.run([
-                            "ffmpeg", "-y",
-                            "-i", file_name,
-                            "-vf", "hflip",
-                            "-c:a", "copy",
-                            mirrored_file
+                            "ffmpeg", "-y", "-i", file_name,
+                            "-vf", "hflip", "-c:a", "copy", mirrored_file_name
                         ], check=True)
-                        st.success("✅ Mirrored version created!")
+                        st.success("Mirrored video created successfully!")
                     except subprocess.CalledProcessError as e:
-                        st.error("❌ ffmpeg mirroring failed.")
-                        st.text(e)
+                        st.error("Failed to mirror video with ffmpeg.")
+                        st.text(str(e))
 
-                if os.path.exists(mirrored_file):
-                    with open(mirrored_file, "rb") as f:
-                        st.download_button("⬇ Download Mirrored", data=f, file_name=os.path.basename(mirrored_file))
+                if os.path.exists(mirrored_file_name):
+                    mirrored_size_mb = os.path.getsize(mirrored_file_name) / (1024 * 1024)
+                    st.write(f"**Mirrored File Size:** {mirrored_size_mb:.1f} MB")
+                    with open(mirrored_file_name, "rb") as f:
+                        st.download_button("Download Mirrored Video", data=f, file_name=os.path.basename(mirrored_file_name))
                     try:
-                        st.video(mirrored_file)
+                        st.video(mirrored_file_name)
                     except:
-                        st.warning("Mirrored preview not available.")
+                        st.warning("Preview not available for mirrored file.")
 
             except DownloadError as de:
-                st.error(f"❌ yt-dlp error: {de}")
+                st.error(f"Download failed: {de}")
+                st.info(
+                    "403 means YouTube blocked access. Ensure your cookies.txt is from a logged-in account "
+                    "and try again, or the video may be private/age-restricted."
+                )
             except Exception as e:
-                st.error("❌ Unexpected error occurred.")
+                st.error(f"Unexpected error: {e}")
                 st.text(traceback.format_exc())
