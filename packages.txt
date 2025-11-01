@@ -1,3 +1,4 @@
 ffmpeg
 nodejs
 npm
+zlib1g-dev
