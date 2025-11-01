@@ -1,116 +1,106 @@
 import streamlit as st
 import subprocess
-import os
-import shutil
 import tempfile
+import os
 from yt_dlp import YoutubeDL
 from io import BytesIO
 
-st.set_page_config(page_title="YouTube Downloader", layout="centered")
+st.set_page_config(page_title="YT Video Transformer", layout="centered")
+st.title("📥 YouTube Video Downloader + Transformer")
 
-st.title("🎬 YouTube Downloader + Transformer")
+url = st.text_input("🎬 Enter YouTube video URL")
 
-url = st.text_input("Enter YouTube URL")
+cookie_file = st.file_uploader("🍪 Upload cookies.txt", type=["txt"])
+downloaded_path, transformed_path = None, None
 
-uploaded_cookies = st.file_uploader("Upload cookies.txt file (from browser)", type=["txt"])
-
-download_button_placeholder = st.empty()
-transformed_file_path = None
-
-def download_video(url, cookies_path):
+def download_video(url, cookie_path):
     temp_dir = tempfile.mkdtemp()
-    output_template = os.path.join(temp_dir, "%(title)s.%(ext)s")
+    outtmpl = os.path.join(temp_dir, "%(title)s.%(ext)s")
 
     ydl_opts = {
         "format": "bestvideo+bestaudio/best",
-        "outtmpl": output_template,
+        "outtmpl": outtmpl,
         "noplaylist": True,
-        "cookies": cookies_path,
-        "quiet": True,
-        "merge_output_format": "mp4"
+        "quiet": False,
+        "merge_output_format": "mp4",
+        "cookies": cookie_path,
+        "extractor_args": {"youtube": {"player_client": "default"}}
     }
 
     with YoutubeDL(ydl_opts) as ydl:
-        info_dict = ydl.extract_info(url, download=True)
-        downloaded_file = ydl.prepare_filename(info_dict)
-        if not downloaded_file.endswith(".mp4"):
-            downloaded_file += ".mp4"
-        return downloaded_file, info_dict.get("title", "video")
+        info = ydl.extract_info(url, download=True)
+        downloaded = ydl.prepare_filename(info)
+        if not downloaded.endswith(".mp4"):
+            downloaded += ".mp4"
+        return downloaded
 
-def mirror_video(input_path):
-    base, ext = os.path.splitext(input_path)
-    output_path = base + "_mirrored.mp4"
+def apply_transformations(input_path):
+    base, _ = os.path.splitext(input_path)
+    output_path = base + "_transformed.mp4"
 
-    # Create progress bar
-    progress_bar = st.progress(0, text="Applying mirror transformation...")
-
-    cmd = [
-        "ffmpeg",
-        "-i", input_path,
-        "-vf", "hflip",
-        "-c:v", "libx264",
-        "-preset", "fast",
-        "-crf", "23",
-        "-c:a", "copy",
+    ffmpeg_cmd = [
+        "ffmpeg", "-i", input_path,
+        "-vf", "hflip,crop=in_w-8:in_h-8:4:4,scale=iw*0.98:ih*0.98,hue=s=0.97,eq=brightness=0.02:contrast=1.05,noise=alls=10",
+        "-af", "asetrate=44100*1.02,atempo=0.98,acompressor",
+        "-c:v", "libx264", "-preset", "fast", "-crf", "23",
+        "-c:a", "aac", "-b:a", "128k",
         "-y", output_path
     ]
 
-    # Run ffmpeg with subprocess and read stderr for updates
-    process = subprocess.Popen(cmd, stderr=subprocess.PIPE, universal_newlines=True)
+    progress = st.progress(0, text="⏳ Processing video...")
 
-    total_duration = None
-    for line in process.stderr:
-        if "Duration" in line:
-            time_str = line.strip().split("Duration: ")[1].split(",")[0]
-            h, m, s = map(float, time_str.split(":"))
-            total_duration = h * 3600 + m * 60 + s
+    try:
+        process = subprocess.Popen(ffmpeg_cmd, stderr=subprocess.PIPE, universal_newlines=True)
+        duration = None
 
-        if "time=" in line and total_duration:
-            try:
-                time_str = line.strip().split("time=")[1].split(" ")[0]
-                h, m, s = map(float, time_str.split(":"))
+        for line in process.stderr:
+            if "Duration" in line:
+                t = line.split("Duration: ")[1].split(",")[0]
+                h, m, s = map(float, t.split(":"))
+                duration = h * 3600 + m * 60 + s
+
+            if "time=" in line and duration:
+                ts = line.split("time=")[1].split(" ")[0]
+                h, m, s = map(float, ts.split(":"))
                 current = h * 3600 + m * 60 + s
-                percent = min(int((current / total_duration) * 100), 100)
-                progress_bar.progress(percent / 100, text=f"Transforming... {percent}%")
-            except:
-                pass
+                pct = int((current / duration) * 100)
+                progress.progress(min(pct, 100) / 100, text=f"🎬 Transforming... {pct}%")
 
-    process.wait()
-    progress_bar.progress(1.0, text="Transformation complete ✅")
-    return output_path
+        process.wait()
+        progress.progress(1.0, text="✅ Transformation complete!")
+        return output_path
 
-if st.button("Download and Transform") and url and uploaded_cookies:
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".txt") as cookie_file:
-        cookie_file.write(uploaded_cookies.read())
-        cookie_file_path = cookie_file.name
+    except Exception as e:
+        st.error(f"⚠️ FFmpeg failed: {str(e)}")
+        return None
 
-    with st.spinner("📥 Downloading video..."):
-        try:
-            downloaded_path, title = download_video(url, cookie_file_path)
-            st.success("✅ Video downloaded successfully!")
-        except Exception as e:
-            st.error(f"Download failed: {str(e)}")
-            st.stop()
+if st.button("🔄 Start Download + Transform"):
+    if not url or not cookie_file:
+        st.error("Please provide both URL and cookies.txt")
+        st.stop()
 
-    with st.spinner("🛠️ Transforming video..."):
-        try:
-            transformed_file_path = mirror_video(downloaded_path)
-            st.success("✅ Transformation complete!")
-        except Exception as e:
-            st.error(f"Transformation failed: {str(e)}")
-            st.stop()
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".txt") as temp_cookie:
+        temp_cookie.write(cookie_file.read())
+        cookie_path = temp_cookie.name
 
-    if transformed_file_path:
-        with open(transformed_file_path, "rb") as f:
-            video_bytes = f.read()
-        st.download_button(
-            label="⬇️ Download Transformed Video",
-            data=BytesIO(video_bytes),
-            file_name=os.path.basename(transformed_file_path),
-            mime="video/mp4"
-        )
+    try:
+        with st.spinner("📥 Downloading video..."):
+            downloaded_path = download_video(url, cookie_path)
+        st.success("✅ Video downloaded!")
 
-        # Clean up temp files
-        os.remove(downloaded_path)
-        os.remove(transformed_file_path)
-        os.remove(cookie_file_path)
+        with st.spinner("⚙️ Transforming video..."):
+            transformed_path = apply_transformations(downloaded_path)
+
+        if transformed_path and os.path.exists(transformed_path):
+            with open(transformed_path, "rb") as f:
+                st.download_button(
+                    label="⬇️ Download Transformed Video",
+                    data=f,
+                    file_name=os.path.basename(transformed_path),
+                    mime="video/mp4"
+                )
+        else:
+            st.error("❌ Something went wrong during transformation")
+
+    except Exception as e:
+        st.error(f"❌ Error: {str(e)}")
