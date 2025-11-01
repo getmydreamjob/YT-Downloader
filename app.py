@@ -1,121 +1,116 @@
 import streamlit as st
-from yt_dlp import YoutubeDL
-from yt_dlp.utils import DownloadError
 import subprocess
 import os
-import traceback
+import shutil
+import tempfile
+from yt_dlp import YoutubeDL
+from io import BytesIO
 
-# Set download folder
-DOWNLOAD_FOLDER = "downloads"
-os.makedirs(DOWNLOAD_FOLDER, exist_ok=True)
+st.set_page_config(page_title="YouTube Downloader", layout="centered")
 
-st.set_page_config(
-    page_title="YouTube Downloader with Mirroring",
-    page_icon="🎬",
-    layout="centered"
-)
+st.title("🎬 YouTube Downloader + Transformer")
 
-st.sidebar.header("Optional: Cookies")
-cookies_file = st.sidebar.file_uploader("Upload your YouTube cookies.txt", type=["txt"])
-cookie_path = None
-if cookies_file:
-    cookie_path = os.path.join(DOWNLOAD_FOLDER, "cookies.txt")
-    with open(cookie_path, "wb") as f:
-        f.write(cookies_file.getbuffer())
+url = st.text_input("Enter YouTube URL")
 
-st.title("🎬 YouTube Video Downloader with Mirroring")
-video_url = st.text_input("YouTube URL", placeholder="https://www.youtube.com/watch?v=...")
+uploaded_cookies = st.file_uploader("Upload cookies.txt file (from browser)", type=["txt"])
 
-if st.button("Download Video"):
-    if not video_url.strip():
-        st.warning("Enter a valid YouTube URL.")
-    else:
-        with st.spinner("Downloading..."):
+download_button_placeholder = st.empty()
+transformed_file_path = None
+
+def download_video(url, cookies_path):
+    temp_dir = tempfile.mkdtemp()
+    output_template = os.path.join(temp_dir, "%(title)s.%(ext)s")
+
+    ydl_opts = {
+        "format": "bestvideo+bestaudio/best",
+        "outtmpl": output_template,
+        "noplaylist": True,
+        "cookies": cookies_path,
+        "quiet": True,
+        "merge_output_format": "mp4"
+    }
+
+    with YoutubeDL(ydl_opts) as ydl:
+        info_dict = ydl.extract_info(url, download=True)
+        downloaded_file = ydl.prepare_filename(info_dict)
+        if not downloaded_file.endswith(".mp4"):
+            downloaded_file += ".mp4"
+        return downloaded_file, info_dict.get("title", "video")
+
+def mirror_video(input_path):
+    base, ext = os.path.splitext(input_path)
+    output_path = base + "_mirrored.mp4"
+
+    # Create progress bar
+    progress_bar = st.progress(0, text="Applying mirror transformation...")
+
+    cmd = [
+        "ffmpeg",
+        "-i", input_path,
+        "-vf", "hflip",
+        "-c:v", "libx264",
+        "-preset", "fast",
+        "-crf", "23",
+        "-c:a", "copy",
+        "-y", output_path
+    ]
+
+    # Run ffmpeg with subprocess and read stderr for updates
+    process = subprocess.Popen(cmd, stderr=subprocess.PIPE, universal_newlines=True)
+
+    total_duration = None
+    for line in process.stderr:
+        if "Duration" in line:
+            time_str = line.strip().split("Duration: ")[1].split(",")[0]
+            h, m, s = map(float, time_str.split(":"))
+            total_duration = h * 3600 + m * 60 + s
+
+        if "time=" in line and total_duration:
             try:
-                ydl_opts = {
-                    'outtmpl': os.path.join(DOWNLOAD_FOLDER, '%(title)s.%(ext)s'),
-                    'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
-                    'merge_output_format': 'mp4',
-                    'quiet': True,
-                    'noplaylist': True,
-                    'retries': 3,
-                    'concurrent_fragment_downloads': 1,
-                    'geo_bypass': True,
-                    'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
-                    'http_headers': {
-                        'Referer': 'https://www.youtube.com',
-                        'Accept-Language': 'en-US,en;q=0.9'
-                    }
-                }
+                time_str = line.strip().split("time=")[1].split(" ")[0]
+                h, m, s = map(float, time_str.split(":"))
+                current = h * 3600 + m * 60 + s
+                percent = min(int((current / total_duration) * 100), 100)
+                progress_bar.progress(percent / 100, text=f"Transforming... {percent}%")
+            except:
+                pass
 
-                if cookie_path:
-                    ydl_opts['cookiefile'] = cookie_path
+    process.wait()
+    progress_bar.progress(1.0, text="Transformation complete ✅")
+    return output_path
 
-                with YoutubeDL(ydl_opts) as ydl:
-                    info = ydl.extract_info(video_url, download=False)
-                    if info.get('is_live'):
-                        st.warning("Live streams are not supported.")
-                        st.stop()
+if st.button("Download and Transform") and url and uploaded_cookies:
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".txt") as cookie_file:
+        cookie_file.write(uploaded_cookies.read())
+        cookie_file_path = cookie_file.name
 
-                    info = ydl.extract_info(video_url, download=True)
-                    file_name = ydl.prepare_filename(info)
-                    if not file_name.endswith(".mp4"):
-                        file_name += ".mp4"
+    with st.spinner("📥 Downloading video..."):
+        try:
+            downloaded_path, title = download_video(url, cookie_file_path)
+            st.success("✅ Video downloaded successfully!")
+        except Exception as e:
+            st.error(f"Download failed: {str(e)}")
+            st.stop()
 
-                if not os.path.exists(file_name) or os.path.getsize(file_name) < 1_000_000:
-                    raise Exception("Download completed but file is empty. Possibly blocked or failed silently.")
+    with st.spinner("🛠️ Transforming video..."):
+        try:
+            transformed_file_path = mirror_video(downloaded_path)
+            st.success("✅ Transformation complete!")
+        except Exception as e:
+            st.error(f"Transformation failed: {str(e)}")
+            st.stop()
 
-                st.success("✅ Download completed!")
-                st.write(f"**Title:** {info.get('title','Unknown')}")
+    if transformed_file_path:
+        with open(transformed_file_path, "rb") as f:
+            video_bytes = f.read()
+        st.download_button(
+            label="⬇️ Download Transformed Video",
+            data=BytesIO(video_bytes),
+            file_name=os.path.basename(transformed_file_path),
+            mime="video/mp4"
+        )
 
-                size_mb = os.path.getsize(file_name) / (1024 * 1024)
-                st.write(f"**Original File Size:** {size_mb:.1f} MB")
-
-                # Download button for original
-                with open(file_name, "rb") as f:
-                    st.download_button("Download Original", data=f, file_name=os.path.basename(file_name))
-
-                try:
-                    st.video(file_name)
-                except:
-                    st.warning("Preview not available.")
-
-                # -----------------------------
-                # Create mirrored version (ffmpeg)
-                # -----------------------------
-                mirrored_file_name = file_name.replace(".mp4", "_mirrored.mp4")
-
-                if not os.path.exists(mirrored_file_name):
-                    st.info("Creating mirrored version using ffmpeg...")
-                    try:
-                        subprocess.run([
-                            "ffmpeg", "-y",
-                            "-i", file_name,
-                            "-vf", "hflip",
-                            "-c:a", "copy",
-                            mirrored_file_name
-                        ], check=True)
-                        st.success("Mirrored video created successfully!")
-                    except subprocess.CalledProcessError as e:
-                        st.error("Failed to mirror video with ffmpeg.")
-                        st.text(e)
-
-                if os.path.exists(mirrored_file_name):
-                    mirrored_size_mb = os.path.getsize(mirrored_file_name) / (1024 * 1024)
-                    st.write(f"**Mirrored File Size:** {mirrored_size_mb:.1f} MB")
-                    with open(mirrored_file_name, "rb") as f:
-                        st.download_button("Download Mirrored Video", data=f, file_name=os.path.basename(mirrored_file_name))
-                    try:
-                        st.video(mirrored_file_name)
-                    except:
-                        st.warning("Preview not available for mirrored file.")
-
-            except DownloadError as de:
-                st.error(f"Download failed: {de}")
-                st.info(
-                    "403 means YouTube blocked access. Ensure your cookies.txt is from a logged-in account "
-                    "and try again, or the video may be private/age-restricted."
-                )
-            except Exception as e:
-                st.error(f"Unexpected error: {e}")
-                st.text(traceback.format_exc())
+        # Clean up temp files
+        os.remove(downloaded_path)
+        os.remove(transformed_file_path)
+        os.remove(cookie_file_path)
